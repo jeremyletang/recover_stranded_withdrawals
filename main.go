@@ -95,7 +95,7 @@ func main() {
 				log.Panicf("error building signature: %v", err)
 			}
 
-			fmt.Printf("%v - %v - %v - %v - %v - %v - 0x%v\n", w.AssetSource, w.Amount, w.TargetAddress, bridgeAddress, w.Creation, w.Nonce, signature.Signature.Hex())
+			// fmt.Printf("%v - %v - %v - %v - %v - %v - 0x%v\n", w.AssetSource, w.Amount, w.TargetAddress, bridgeAddress, w.Creation, w.Nonce, signature.Signature.Hex())
 			out = fmt.Sprintf("%v%v,0x%v\n", out, k, signature.Signature.Hex())
 
 			bar.Add(1)
