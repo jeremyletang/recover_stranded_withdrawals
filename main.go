@@ -3,12 +3,16 @@ package main
 import (
 	"crypto/ecdsa"
 	_ "embed"
+	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/fs"
 	"io/ioutil"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"code.vegaprotocol.io/vega/core/bridges"
@@ -33,19 +37,36 @@ var (
 	//go:embed mainnet11.json
 	buf11 []byte
 
-	vegaHome   string
-	privateKey string
-	outfile    string
+	vegaHome      string
+	privateKey    string
+	outfile       string
+	reconcile     bool
+	signaturesDir string
 )
 
 func init() {
 	flag.StringVar(&vegaHome, "home", "", "path to custom vega home")
 	flag.StringVar(&privateKey, "privkey", "", "a ethereum private key to be use to sign the messages")
 	flag.StringVar(&outfile, "outfile", "out.csv", "a path to a file to save the output")
+	flag.BoolVar(&reconcile, "reconcile", false, "reconcile files")
+	flag.StringVar(&signaturesDir, "sigdir", "signatures", "folder contaning all signatures")
 }
 
 func main() {
 	flag.Parse()
+
+	if len(outfile) <= 0 {
+		log.Fatal("outfile argument is required")
+	}
+
+	if reconcile {
+		if len(signaturesDir) <= 0 {
+			log.Fatal("sigdir argument required")
+		}
+
+		doReconcile()
+		return
+	}
 
 	switch {
 	case len(vegaHome) > 0:
@@ -64,15 +85,7 @@ func main() {
 
 	erc20Logic := bridges.NewERC20Logic(s, bridgeAddress)
 
-	ws := getStrandedWithdrawals(buf10)
-	for k, v := range getStrandedWithdrawals(buf11) {
-		w, ok := ws[k]
-		if !ok {
-			w = []idBundlePair{}
-		}
-
-		ws[k] = append(w, v...)
-	}
+	ws := extractAllStranded()
 
 	var l int
 	for _, v := range ws {
@@ -106,6 +119,95 @@ func main() {
 	if err != nil {
 		log.Fatalf("could not marshal data: %v", err)
 	}
+}
+
+func extractAllStranded() map[string][]idBundlePair {
+	ws := getStrandedWithdrawals(buf10)
+	for k, v := range getStrandedWithdrawals(buf11) {
+		w, ok := ws[k]
+		if !ok {
+			w = []idBundlePair{}
+		}
+
+		ws[k] = append(w, v...)
+	}
+
+	return ws
+}
+
+func doReconcile() {
+	ws := extractAllStranded()
+
+	// first clear up old signatures
+	for _, v := range ws {
+		for _, w := range v {
+			w.Signatures = "0x"
+		}
+	}
+
+	fileSystem := os.DirFS(signaturesDir)
+
+	fs.WalkDir(fileSystem, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			log.Fatal(err)
+		}
+		if !d.IsDir() {
+			signatures := getNewSignatures(filepath.Join(signaturesDir, path))
+
+			// now add the signatures in there
+			for _, v := range signatures {
+				for _, w := range ws[v.Party] {
+					if w.WithdrawalID == v.WithdrawID {
+						w.Signatures += v.Signature
+						break
+					}
+				}
+			}
+
+		}
+		return nil
+	})
+
+	// now write the final output
+	// fmt.Printf("%v - %v - %v - %v - %v - %v - 0x%v\n", w.AssetSource, w.Amount, w.TargetAddress, bridgeAddress, w.Creation, w.Nonce, signature.Signature.Hex())
+	out := "party, withdrawalId, assetSource, amount, targetAddress, creation, nonce, signatures\n"
+	for k, v := range ws {
+		for _, w := range v {
+			out = fmt.Sprintf("%v%v,%v,%v,%v,%v,%v,%v,%v\n", out, k, w.WithdrawalID, w.AssetSource, w.Amount, w.TargetAddress, w.Creation, w.Nonce, w.Signatures)
+		}
+	}
+
+	err := ioutil.WriteFile(outfile, []byte(out), 0644)
+	if err != nil {
+		log.Fatalf("could write file: %v", err)
+	}
+}
+
+type newSignature struct {
+	Party      string
+	WithdrawID string
+	Signature  string
+}
+
+func getNewSignatures(filePath string) []newSignature {
+	signatures := []newSignature{}
+	buf, err := os.ReadFile(filePath)
+	if err != nil {
+		log.Fatalf("couldn't read file: %v", err)
+	}
+
+	r := csv.NewReader(strings.NewReader(string(buf)))
+
+	records, err := r.ReadAll()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for _, v := range records[1:] {
+		signatures = append(signatures, newSignature{v[0], v[1], v[2][2:]})
+	}
+
+	return signatures
 }
 
 func getSigner(vegaPaths paths.Paths) (bridges.Signer, error) {
