@@ -68,7 +68,7 @@ func main() {
 	for k, v := range getStrandedWithdrawals(buf11) {
 		w, ok := ws[k]
 		if !ok {
-			w = []*v2.GetERC20WithdrawalApprovalResponse{}
+			w = []idBundlePair{}
 		}
 
 		ws[k] = append(w, v...)
@@ -83,7 +83,7 @@ func main() {
 
 	bar := progressbar.Default(int64(l))
 
-	out := "party, signature\n"
+	out := "party, withdrawalId, signature\n"
 	for k, v := range ws {
 		for _, w := range v {
 			amount, _ := num.UintFromString(w.Amount, 10)
@@ -96,7 +96,7 @@ func main() {
 			}
 
 			// fmt.Printf("%v - %v - %v - %v - %v - %v - 0x%v\n", w.AssetSource, w.Amount, w.TargetAddress, bridgeAddress, w.Creation, w.Nonce, signature.Signature.Hex())
-			out = fmt.Sprintf("%v%v,0x%v\n", out, k, signature.Signature.Hex())
+			out = fmt.Sprintf("%v%v,%v,0x%v\n", out, k, w.WithdrawalID, signature.Signature.Hex())
 
 			bar.Add(1)
 		}
@@ -191,7 +191,12 @@ type entry struct {
 	Withdrawals []Withdrawal `json:"withdrawal"`
 }
 
-func getStrandedWithdrawals(buf []byte) map[string][]*v2.GetERC20WithdrawalApprovalResponse { // map of party to withdrawls bundles
+type idBundlePair struct {
+	WithdrawalID string
+	*v2.GetERC20WithdrawalApprovalResponse
+}
+
+func getStrandedWithdrawals(buf []byte) map[string][]idBundlePair { // map of party to withdrawls bundles
 	store := []entry{}
 
 	err := json.Unmarshal(buf, &store)
@@ -199,16 +204,16 @@ func getStrandedWithdrawals(buf []byte) map[string][]*v2.GetERC20WithdrawalAppro
 		log.Fatalf("could not unmarshal: %v", err)
 	}
 
-	out := map[string][]*v2.GetERC20WithdrawalApprovalResponse{}
+	out := map[string][]idBundlePair{}
 	for _, v := range store {
 		for _, w := range v.Withdrawals {
 			if w.Withdrawal.Status == 3 && len(w.Withdrawal.TxHash) <= 0 {
 				entry, ok := out[v.Party]
 				if !ok {
-					entry = []*v2.GetERC20WithdrawalApprovalResponse{}
+					entry = []idBundlePair{}
 				}
 
-				out[v.Party] = append(entry, w.Bundle)
+				out[v.Party] = append(entry, idBundlePair{w.Withdrawal.Id, w.Bundle})
 
 			}
 		}
